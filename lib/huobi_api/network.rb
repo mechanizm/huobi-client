@@ -24,6 +24,12 @@ module HuobiApi
     end
 
     def request(endpoint, method, data)
+      version_match = endpoint.match(/^\/v(\d)\//)
+
+      raise 'Unrecognized API version query' if version_match.nil?
+
+      version = version_match[1].to_i
+
       uri = URI.parse(BASE_URL)
       http = Net::HTTP.new(uri.host, uri.port)
       http.use_ssl = true
@@ -31,13 +37,25 @@ module HuobiApi
       params = build_params(endpoint, method, data)
       url = "#{BASE_URL}#{endpoint}?#{Rack::Utils.build_query(params)}"
 
-      begin
-        JSON.parse http.send_request(method, url, JSON.dump(data), HEADERS).body
-      rescue Net::HTTPExceptions => e
-        {"message" => 'error' ,"request_error" => e.message}
-      rescue JSON::ParserError => e
-        {"message" => 'error' ,"request_error" => e.message}
+      payload = (method == :POST ? JSON.dump(data) : nil)
+      response = JSON.parse(http.send_request(method, url, payload, HEADERS).body)
+
+      ensure_success!(version, response)
+    end
+
+    private
+
+    def ensure_success!(version, response)
+      case version
+      when 1
+        raise response['err-msg'] if response['status'] == 'error'
+      when 2
+        raise response['message'] if response['code'] != 200
+      else
+        raise "Version #{version} is not supported"
       end
+
+      response
     end
 
     def build_params(endpoint, method, data)
@@ -50,7 +68,7 @@ module HuobiApi
       }
 
       # add in what we're sending, if it's a get request
-      params.merge!(data) if method.to_s.upcase == "GET"
+      params.merge!(data.compact.stringify_keys) if method.to_s.upcase == "GET"
       # alphabetical order, as that's what huobi likes
       sorted_params = hash_sort(params)
       #  now mash into a query string
